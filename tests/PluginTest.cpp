@@ -44,6 +44,17 @@ int main()
         CHECK (o == kv::Order ({ kv::kModLimiter, kv::kModImager, kv::kModEq, kv::kModMbc, kv::kModComp }), "station order survives save/load (%d %d %d %d %d)", o[0], o[1], o[2], o[3], o[4]);
         CHECK ((int) b.uiState().getProperty ("module", -1) == 3, "editor state (open station) survives save/load");
 
+        // pluginval-style: switches left at odd in-between values must come back exactly as saved
+        {
+            auto* sw = b.apvts.getParameter (params::moduleOn (kv::kModMbc));
+            sw->setValueNotifyingHost (0.3f);
+            juce::MemoryBlock mb2;
+            b.getStateInformation (mb2);
+            sw->setValueNotifyingHost (0.86f);
+            b.setStateInformation (mb2.getData(), (int) mb2.getSize());
+            CHECK (std::abs (sw->getValue() - 0.0f) < 0.01f, "switch parameter restored exactly (%.3f)", sw->getValue());
+        }
+
         KonveyerProcessor c;
         const char junk[] = "not a state";
         c.setStateInformation (junk, (int) sizeof (junk));

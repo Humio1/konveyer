@@ -144,6 +144,16 @@ void KonveyerProcessor::setStateInformation (const void* data, int sizeInBytes)
         return;
     auto tree = juce::ValueTree::fromXml (*xml);
     apvts.replaceState (tree);
+    // replaceState skips parameters whose snapped value already matches (e.g. a switch sitting at 0.86),
+    // so push every stored value explicitly; the host then sees exactly what was saved.
+    for (auto* p : getParameters())
+        if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
+            if (auto* raw = apvts.getRawParameterValue (rp->getParameterID()))
+            {
+                const float norm = rp->convertTo0to1 (raw->load());
+                if (std::abs (rp->getValue() - norm) > 1.0e-6f)
+                    rp->setValueNotifyingHost (norm);
+            }
     const auto o = orderFromString (tree.getProperty ("order").toString());
     orderPacked.store (kv::packOrder (o));
     currentProgram = juce::jlimit (0, getNumPrograms() - 1, (int) tree.getProperty ("program", 0));
