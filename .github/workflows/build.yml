@@ -48,8 +48,16 @@ jobs:
         run: |
           curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
           unzip -q pluginval.zip
+          set +e
           pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --skip-gui-tests --validate-in-process \
-            --validate build/Konveyer_artefacts/Release/VST3/KONVEYER.vst3
+            --validate build/Konveyer_artefacts/Release/VST3/KONVEYER.vst3 > pluginval.log 2>&1
+          status=$?
+          cat pluginval.log
+          if [ $status -ne 0 ]; then
+            grep -n -B3 -A6 "FAILED\|!!!" pluginval.log | head -60 | while IFS= read -r line; do echo "::error::$line"; done
+            tail -15 pluginval.log | while IFS= read -r line; do echo "::error::$line"; done
+          fi
+          exit $status
 
       - name: Validate AU with auval
         run: |
