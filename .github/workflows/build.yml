@@ -1,0 +1,101 @@
+name: Build
+
+on:
+  push:
+    branches: [main, tishina-ci]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macOS (VST3 + AU, Apple Silicon + Intel)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache JUCE download
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: juce-8.0.9-${{ runner.os }}-tishina-v1
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DKV_DEV_TOOLS=ON
+
+      - name: Engine test
+        run: |
+          cmake --build build --target EngineTest -j 4
+          ./build/EngineTest
+
+      - name: Build plugin
+        run: cmake --build build --target Tishina_VST3 Tishina_AU -j 4
+
+      - name: Plugin test (state, presets, latency, quality)
+        run: |
+          cmake --build build --target PluginTest -j 4
+          ./build/PluginTest
+
+      - name: Sign (ad hoc)
+        run: |
+          codesign --force --deep --sign - build/Tishina_artefacts/Release/VST3/TISHINA.vst3
+          codesign --force --deep --sign - build/Tishina_artefacts/Release/AU/TISHINA.component
+
+      - name: Validate VST3 with pluginval
+        run: |
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q pluginval.zip
+          set +e
+          pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --skip-gui-tests --validate-in-process \
+            --validate build/Tishina_artefacts/Release/VST3/TISHINA.vst3 > pluginval.log 2>&1
+          status=$?
+          cat pluginval.log
+          if [ $status -ne 0 ]; then
+            grep -n -B3 -A6 "FAILED\|!!!" pluginval.log | head -60 | while IFS= read -r line; do echo "::error::$line"; done
+            tail -15 pluginval.log | while IFS= read -r line; do echo "::error::$line"; done
+          fi
+          exit $status
+
+      - name: Validate AU with auval
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R build/Tishina_artefacts/Release/AU/TISHINA.component ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          sleep 5
+          auval -v aufx Tshn Hmio || (sleep 15 && auval -v aufx Tshn Hmio)
+
+      - name: Package
+        run: |
+          mkdir -p dist/TISHINA/Licenses
+          cp -R build/Tishina_artefacts/Release/VST3/TISHINA.vst3 dist/TISHINA/
+          cp -R build/Tishina_artefacts/Release/AU/TISHINA.component dist/TISHINA/
+          cp "scripts/Install TISHINA.command" dist/TISHINA/
+          chmod +x "dist/TISHINA/Install TISHINA.command"
+          cp INSTALL.md dist/TISHINA/
+          cp Resources/fonts/OFL-*.txt dist/TISHINA/Licenses/
+          cd dist && ditto -c -k --keepParent TISHINA ../TISHINA-macOS.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TISHINA-macOS
+          path: TISHINA-macOS.zip
+
+      - name: Read version
+        id: version
+        run: echo "version=$(sed -n 's/^project(TISHINA VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: TISHINA ${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          body: |
+            Download **TISHINA-macOS.zip** below, unzip it and double-click **Install TISHINA.command**.
+            Built from ${{ github.sha }}.
+          files: TISHINA-macOS.zip
+          overwrite_files: true
